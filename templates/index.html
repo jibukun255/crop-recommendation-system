@@ -1,0 +1,643 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Crop Recommendation System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"/>
+  <style>
+    :root {
+      --green-dark:  #1B4332;
+      --green-mid:   #2D6A4F;
+      --green-light: #52B788;
+      --green-pale:  #D8F3DC;
+      --green-mint:  #B7E4C7;
+      --amber:       #F4A261;
+      --cream:       #FAFAF5;
+      --white:       #FFFFFF;
+      --gray:        #6B7280;
+      --shadow:      0 4px 24px rgba(27,67,50,0.10);
+      --radius:      14px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'DM Sans', sans-serif; background: var(--cream); color: var(--green-dark); min-height: 100vh; }
+
+    /* Header */
+    header {
+      background: var(--green-dark);
+      padding: 16px 40px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      position: sticky;
+      top: 0;
+      z-index: 1000;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.15);
+    }
+    header .logo { font-size: 26px; }
+    header h1 { font-family: 'Playfair Display', serif; color: var(--white); font-size: 1.3rem; }
+    header p  { color: var(--green-mint); font-size: 0.78rem; margin-top: 2px; }
+
+    /* Hero */
+    .hero {
+      background: linear-gradient(135deg, var(--green-dark), var(--green-mid));
+      padding: 40px;
+      text-align: center;
+    }
+    .hero h2 { font-family: 'Playfair Display', serif; color: var(--white); font-size: 2rem; margin-bottom: 10px; }
+    .hero p  { color: var(--green-mint); font-size: 0.95rem; max-width: 500px; margin: 0 auto; line-height: 1.6; }
+
+    /* Main */
+    .container { max-width: 1100px; margin: 0 auto; padding: 36px 24px; }
+
+    /* Two-column grid */
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+    @media (max-width: 780px) { .two-col { grid-template-columns: 1fr; } }
+
+    /* Card */
+    .card {
+      background: var(--white);
+      border-radius: var(--radius);
+      padding: 24px;
+      box-shadow: var(--shadow);
+      border: 1px solid rgba(27,67,50,0.07);
+      margin-bottom: 20px;
+    }
+    .card:last-child { margin-bottom: 0; }
+    .card-title {
+      font-family: 'Playfair Display', serif;
+      font-size: 1.1rem;
+      color: var(--green-dark);
+      margin-bottom: 16px;
+      padding-bottom: 10px;
+      border-bottom: 2px solid var(--green-pale);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card-subtitle {
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.72rem;
+      font-weight: 400;
+      color: var(--gray);
+      margin-left: auto;
+    }
+
+    /* Form */
+    .form-group { margin-bottom: 14px; }
+    .form-row   { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    label {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--green-mid);
+      margin-bottom: 5px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+    }
+    input[type="number"], input[type="text"] {
+      width: 100%;
+      padding: 9px 12px;
+      border: 1.5px solid var(--green-mint);
+      border-radius: 8px;
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.92rem;
+      color: var(--green-dark);
+      background: var(--cream);
+      outline: none;
+      transition: border-color 0.2s;
+    }
+    input:focus { border-color: var(--green-light); background: var(--white); }
+
+    /* Soil picture cards */
+    .soil-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .soil-card {
+      border: 2px solid var(--green-mint);
+      border-radius: 10px;
+      padding: 10px 4px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      background: var(--cream);
+    }
+    .soil-card:hover    { border-color: var(--green-light); background: var(--green-pale); }
+    .soil-card.selected { border-color: var(--green-mid); background: var(--green-pale); box-shadow: 0 0 0 3px rgba(82,183,136,0.2); }
+    .soil-card .si      { font-size: 1.5rem; margin-bottom: 3px; }
+    .soil-card .sn      { font-size: 0.65rem; font-weight: 600; color: var(--green-dark); line-height: 1.2; }
+
+    /* Location tabs */
+    .tab-btns { display: flex; gap: 8px; margin-bottom: 12px; }
+    .tab-btn {
+      flex: 1;
+      padding: 8px;
+      border: 2px solid var(--green-mint);
+      border-radius: 8px;
+      background: var(--cream);
+      color: var(--green-mid);
+      font-family: 'DM Sans', sans-serif;
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .tab-btn.active { background: var(--green-mid); color: var(--white); border-color: var(--green-mid); }
+    .tab-panel       { display: none; }
+    .tab-panel.active{ display: block; }
+
+    /* Map */
+    .map-search-row { display: flex; gap: 8px; margin-bottom: 8px; }
+    .map-search-row input { flex: 1; }
+    #map { height: 280px; border-radius: 10px; border: 2px solid var(--green-mint); }
+
+    /* Address search */
+    .addr-row { display: flex; gap: 8px; }
+    .addr-row input { flex: 1; }
+
+    /* Search button */
+    .btn-sm {
+      padding: 9px 14px;
+      background: var(--green-mid);
+      color: var(--white);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.82rem;
+      white-space: nowrap;
+      transition: background 0.2s;
+    }
+    .btn-sm:hover    { background: var(--green-dark); }
+    .btn-sm:disabled { opacity: 0.6; cursor: not-allowed; }
+
+    /* Coords display */
+    .coords-box {
+      margin-top: 10px;
+      padding: 8px 12px;
+      background: var(--green-pale);
+      border-radius: 8px;
+      font-size: 0.8rem;
+      color: var(--green-mid);
+      font-weight: 500;
+      display: none;
+    }
+    .coords-box.show { display: block; }
+
+    /* Auto-fill status */
+    .autofill-status {
+      padding: 12px;
+      background: var(--green-pale);
+      border-radius: 8px;
+      font-size: 0.82rem;
+      color: var(--green-mid);
+      text-align: center;
+      margin-bottom: 14px;
+    }
+
+    /* Submit */
+    .btn-submit {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, var(--green-mid), var(--green-dark));
+      color: var(--white);
+      border: none;
+      border-radius: var(--radius);
+      font-family: 'Playfair Display', serif;
+      font-size: 1.05rem;
+      cursor: pointer;
+      margin-top: 20px;
+      transition: all 0.2s;
+      box-shadow: 0 4px 14px rgba(27,67,50,0.25);
+      letter-spacing: 0.4px;
+    }
+    .btn-submit:hover     { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(27,67,50,0.3); }
+    .btn-submit:disabled  { opacity: 0.6; cursor: not-allowed; transform: none; }
+
+    /* Error */
+    .error-box { background: #FEE2E2; color: #DC2626; border-radius: 8px; padding: 10px 14px; margin-top: 10px; font-size: 0.85rem; display: none; }
+
+    /* Loading */
+    .loading { text-align: center; padding: 20px; color: var(--green-mid); font-weight: 500; display: none; }
+    .spinner {
+      display: inline-block; width: 18px; height: 18px;
+      border: 3px solid var(--green-pale); border-top-color: var(--green-mid);
+      border-radius: 50%; animation: spin 0.8s linear infinite;
+      margin-right: 8px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Results */
+    #results { margin-top: 28px; display: none; }
+    .results-title { font-family: 'Playfair Display', serif; font-size: 1.3rem; color: var(--green-dark); text-align: center; margin-bottom: 16px; }
+    .loc-info { background: var(--green-pale); border-radius: 10px; padding: 10px 16px; margin-bottom: 16px; font-size: 0.8rem; color: var(--green-mid); display: flex; gap: 16px; flex-wrap: wrap; }
+    .loc-info span { font-weight: 600; }
+    .results-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    @media (max-width: 600px) { .results-grid { grid-template-columns: 1fr; } }
+
+    .result-card {
+      background: var(--white);
+      border-radius: var(--radius);
+      padding: 22px 16px;
+      text-align: center;
+      box-shadow: var(--shadow);
+      border: 2px solid transparent;
+      animation: slideUp 0.4s ease forwards;
+      opacity: 0;
+    }
+    .result-card:nth-child(1) { animation-delay: 0.05s; border-color: var(--green-mid); }
+    .result-card:nth-child(2) { animation-delay: 0.15s; }
+    .result-card:nth-child(3) { animation-delay: 0.25s; }
+    @keyframes slideUp { from { opacity:0; transform:translateY(20px); } to { opacity:1; transform:translateY(0); } }
+
+    .r-rank   { font-size: 0.7rem; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: var(--gray); margin-bottom: 8px; }
+    .result-card:nth-child(1) .r-rank { color: var(--green-mid); }
+    .r-emoji  { font-size: 2.8rem; margin-bottom: 6px; }
+    .r-crop   { font-family: 'Playfair Display', serif; font-size: 1.15rem; color: var(--green-dark); margin-bottom: 4px; text-transform: capitalize; }
+    .r-conf   { font-size: 1.5rem; font-weight: 700; color: var(--green-light); margin-bottom: 4px; }
+    .result-card:nth-child(1) .r-conf { color: var(--green-mid); }
+    .conf-bar { height: 5px; background: var(--green-pale); border-radius: 3px; margin: 6px 0 10px; overflow: hidden; }
+    .conf-fill{ height: 100%; background: linear-gradient(90deg, var(--green-light), var(--green-mid)); border-radius: 3px; }
+    .r-season { font-size: 0.72rem; color: var(--amber); font-weight: 600; margin-bottom: 5px; }
+    .r-desc   { font-size: 0.75rem; color: var(--gray); line-height: 1.5; }
+
+    footer { text-align: center; padding: 20px; color: var(--gray); font-size: 0.78rem; border-top: 1px solid var(--green-pale); margin-top: 40px; }
+    .hint  { font-size: 0.75rem; color: var(--gray); margin-top: 6px; }
+  </style>
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <div class="logo">🌾</div>
+  <div>
+    <h1>Crop Recommendation System</h1>
+    <p>AI-powered crop advisory for smarter farming decisions</p>
+  </div>
+</header>
+
+<!-- Hero -->
+<div class="hero">
+  <h2>What should you grow?</h2>
+  <p>Select your soil type, pick your farm location on the map — we handle the rest automatically.</p>
+</div>
+
+<!-- Main content -->
+<div class="container">
+  <form id="cropForm">
+    <div class="two-col">
+
+      <!-- ══ LEFT COLUMN ══ -->
+      <div>
+
+        <!-- Soil Type -->
+        <div class="card">
+          <div class="card-title">🪨 Soil Type</div>
+          <p class="hint" style="margin-bottom:12px;">Select the soil color/type that best matches your farm.</p>
+          <div class="soil-grid">
+            {% set soils = [
+              ("Alluvial",   "🟤"),
+              ("Black",      "⬛"),
+              ("Clay",       "🟫"),
+              ("Clay loam",  "🟫"),
+              ("Laterite",   "🔴"),
+              ("Loamy",      "🟤"),
+              ("Sandy",      "🟡"),
+              ("Sandy loam", "🟡")
+            ] %}
+            {% for name, icon in soils %}
+            <div class="soil-card" onclick="selectSoil(this,'{{ name }}')">
+              <div class="si">{{ icon }}</div>
+              <div class="sn">{{ name }}</div>
+            </div>
+            {% endfor %}
+          </div>
+          <input type="hidden" name="soiltype" id="soiltype"/>
+          <p id="soilErr" style="color:#DC2626;font-size:0.78rem;margin-top:6px;display:none;">Please select a soil type.</p>
+        </div>
+
+        <!-- Auto-filled Soil & Climate -->
+        <div class="card">
+          <div class="card-title">
+            🌱 Soil &amp; Climate Data
+            <span class="card-subtitle">Auto-fetched from location</span>
+          </div>
+
+          <div class="autofill-status" id="afStatus">
+            📍 Pick your farm location on the map to auto-fill these values
+          </div>
+
+          <div id="afFields" style="display:none;">
+            <div class="form-row">
+              <div class="form-group">
+                <label>Nitrogen (N) kg/ha</label>
+                <input type="number" name="N" id="fN" min="0" max="200"/>
+              </div>
+              <div class="form-group">
+                <label>Phosphorus (P) kg/ha</label>
+                <input type="number" name="P" id="fP" min="0" max="150"/>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Potassium (K) kg/ha</label>
+                <input type="number" name="K" id="fK" min="0" max="210"/>
+              </div>
+              <div class="form-group">
+                <label>Soil pH</label>
+                <input type="number" name="ph" id="fPh" min="0" max="14" step="0.1"/>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Temperature (°C)</label>
+                <input type="number" name="temperature" id="fTemp" min="-10" max="55" step="0.1"/>
+              </div>
+              <div class="form-group">
+                <label>Humidity (%)</label>
+                <input type="number" name="humidity" id="fHumidity" min="0" max="100" step="0.1"/>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>Annual Rainfall (mm)</label>
+              <input type="number" name="rainfall" id="fRainfall" min="0" max="3000" step="0.1"/>
+            </div>
+            <p class="hint">Values fetched from satellite data — adjust if needed.</p>
+          </div>
+        </div>
+
+      </div><!-- end left col -->
+
+      <!-- ══ RIGHT COLUMN ══ -->
+      <div>
+        <div class="card">
+          <div class="card-title">📍 Farm Location</div>
+          <p class="hint" style="margin-bottom:14px;">Search or click the map. Elevation, slope &amp; aspect are fetched automatically.</p>
+
+          <!-- Tabs -->
+          <div class="tab-btns">
+            <button type="button" class="tab-btn active" onclick="switchTab(this,'map')">🗺️ Click on Map</button>
+            <button type="button" class="tab-btn"        onclick="switchTab(this,'addr')">🔍 Type Address</button>
+          </div>
+
+          <!-- Map tab -->
+          <div class="tab-panel active" id="tab-map">
+            <div class="map-search-row">
+              <input type="text" id="mapSearch" placeholder="Search e.g. Kano, Nigeria"/>
+              <button type="button" class="btn-sm" onclick="searchOnMap()">Search</button>
+            </div>
+            <div id="map"></div>
+            <p class="hint" style="margin-top:6px;">Click anywhere on the map to set your farm location.</p>
+          </div>
+
+          <!-- Address tab -->
+          <div class="tab-panel" id="tab-addr">
+            <div class="addr-row">
+              <input type="text" id="addrInput" placeholder="e.g. Ibadan, Oyo State, Nigeria"/>
+              <button type="button" class="btn-sm" onclick="searchAddr()">Search</button>
+            </div>
+            <p class="hint" style="margin-top:6px;">Enter your city, town, or region name.</p>
+          </div>
+
+          <!-- Coordinates display -->
+          <div class="coords-box" id="coordsBox">
+            📍 <span id="coordsText">—</span>
+          </div>
+
+          <input type="hidden" name="lat" id="lat"/>
+          <input type="hidden" name="lon" id="lon"/>
+        </div>
+      </div><!-- end right col -->
+
+    </div><!-- end two-col -->
+
+    <div class="error-box" id="errBox"></div>
+
+    <button type="submit" class="btn-submit">🌱 Get Crop Recommendations</button>
+  </form>
+
+  <div class="loading" id="loading">
+    <span class="spinner"></span> Analysing soil, climate and terrain...
+  </div>
+
+  <!-- Results -->
+  <div id="results">
+    <h2 class="results-title">🌾 Recommended Crops for Your Farm</h2>
+    <div class="loc-info" id="locInfo"></div>
+    <div class="results-grid" id="resGrid"></div>
+  </div>
+</div>
+
+<footer>
+  Crop Recommendation System &nbsp;|&nbsp; Powered by XGBoost &nbsp;|&nbsp;
+  Climate: Open-Meteo &nbsp;|&nbsp; Terrain: NASA NASADEM &nbsp;|&nbsp; Final Year Project
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── Map ──────────────────────────────────────────────────────────────────────
+let map, marker;
+
+window.addEventListener('load', function() {
+  if (typeof L === 'undefined') {
+    document.getElementById('map').innerHTML =
+      '<div style="padding:30px;text-align:center;color:#6B7280;">Map unavailable — use Address tab.</div>';
+    return;
+  }
+  map = L.map('map').setView([20.5937, 78.9629], 3);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap'
+  }).addTo(map);
+  map.on('click', function(e) {
+    placeMarker(e.latlng.lat.toFixed(6), e.latlng.lng.toFixed(6));
+  });
+});
+
+function placeMarker(lat, lon, name) {
+  if (!map) return;
+  if (marker) map.removeLayer(marker);
+  marker = L.marker([lat, lon]).addTo(map);
+  if (name) marker.bindPopup(name).openPopup();
+  setLocation(lat, lon, name);
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+function switchTab(btn, tab) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('tab-' + tab).classList.add('active');
+  if (tab === 'map' && map) setTimeout(() => map.invalidateSize(), 100);
+}
+
+// ── Geocode helper (browser-side Nominatim) ───────────────────────────────────
+async function geocode(query) {
+  const res  = await fetch(
+    `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+    { headers: { 'Accept-Language': 'en' } }
+  );
+  const data = await res.json();
+  if (!data.length) throw new Error('Location not found. Try adding the country name.');
+  return { lat: parseFloat(data[0].lat), lon: parseFloat(data[0].lon), name: data[0].display_name };
+}
+
+// ── Map search ────────────────────────────────────────────────────────────────
+async function searchOnMap() {
+  const q = document.getElementById('mapSearch').value.trim();
+  if (!q) return;
+  const btn = document.querySelector('#tab-map .btn-sm');
+  btn.textContent = '...'; btn.disabled = true;
+  try {
+    const r = await geocode(q);
+    map.setView([r.lat, r.lon], 11);
+    placeMarker(r.lat, r.lon, r.name);
+  } catch(e) { alert(e.message); }
+  btn.textContent = 'Search'; btn.disabled = false;
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  document.getElementById('mapSearch').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); searchOnMap(); }
+  });
+  document.getElementById('addrInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); searchAddr(); }
+  });
+});
+
+// ── Address search ─────────────────────────────────────────────────────────────
+async function searchAddr() {
+  const q = document.getElementById('addrInput').value.trim();
+  if (!q) return;
+  const btn = document.querySelector('#tab-addr .btn-sm');
+  btn.textContent = '...'; btn.disabled = true;
+  try {
+    const r = await geocode(q);
+    if (map) { map.setView([r.lat, r.lon], 11); placeMarker(r.lat, r.lon, r.name); }
+    else setLocation(r.lat, r.lon, r.name);
+  } catch(e) { alert(e.message); }
+  btn.textContent = 'Search'; btn.disabled = false;
+}
+
+// ── Set location + trigger auto-fill ─────────────────────────────────────────
+function setLocation(lat, lon, name) {
+  document.getElementById('lat').value = lat;
+  document.getElementById('lon').value = lon;
+  const label = name
+    ? name.split(',').slice(0,2).join(',') + ` — Lat: ${parseFloat(lat).toFixed(3)}, Lon: ${parseFloat(lon).toFixed(3)}`
+    : `Lat: ${parseFloat(lat).toFixed(4)}, Lon: ${parseFloat(lon).toFixed(4)}`;
+  document.getElementById('coordsText').textContent = label;
+  document.getElementById('coordsBox').classList.add('show');
+  autoFill(lat, lon);
+}
+
+// ── Auto-fill from location ───────────────────────────────────────────────────
+async function autoFill(lat, lon) {
+  const status = document.getElementById('afStatus');
+  const fields = document.getElementById('afFields');
+  status.innerHTML = '<span class="spinner"></span> Fetching soil & climate data...';
+  status.style.display = 'block';
+  fields.style.display = 'none';
+
+  try {
+    const res  = await fetch(`/autofill?lat=${lat}&lon=${lon}`);
+    const data = await res.json();
+    if (data.success) {
+      document.getElementById('fN').value        = data.soil.N;
+      document.getElementById('fP').value        = data.soil.P;
+      document.getElementById('fK').value        = data.soil.K;
+      document.getElementById('fPh').value       = data.soil.ph;
+      document.getElementById('fTemp').value     = data.climate.temperature;
+      document.getElementById('fHumidity').value = data.climate.humidity;
+      document.getElementById('fRainfall').value = data.climate.rainfall;
+      const src = data.soil.source || 'Satellite data';
+      status.innerHTML = `✓ <strong>${src}</strong> + Open-Meteo weather. Adjust values if needed.`;
+      status.style.background = '#D8F3DC';
+      fields.style.display = 'block';
+    } else {
+      status.innerHTML = '⚠️ Auto-fill failed. Please enter values manually.';
+      fields.style.display = 'block';
+    }
+  } catch(e) {
+    status.innerHTML = '⚠️ Could not fetch data. Enter values manually.';
+    fields.style.display = 'block';
+  }
+}
+
+// ── Soil type selection ───────────────────────────────────────────────────────
+function selectSoil(card, name) {
+  document.querySelectorAll('.soil-card').forEach(c => c.classList.remove('selected'));
+  card.classList.add('selected');
+  document.getElementById('soiltype').value = name;
+  document.getElementById('soilErr').style.display = 'none';
+}
+
+// ── Form submit ───────────────────────────────────────────────────────────────
+document.getElementById('cropForm').addEventListener('submit', async function(e) {
+  e.preventDefault();
+
+  if (!document.getElementById('soiltype').value) {
+    document.getElementById('soilErr').style.display = 'block';
+    return;
+  }
+  if (!document.getElementById('lat').value) {
+    showErr('Please select a farm location on the map or search an address.');
+    return;
+  }
+
+  hideErr();
+  document.getElementById('loading').style.display = 'block';
+  document.getElementById('results').style.display = 'none';
+  document.querySelector('.btn-submit').disabled = true;
+
+  try {
+    const res  = await fetch('/predict', { method: 'POST', body: new FormData(this) });
+    const data = await res.json();
+    if (data.error) showErr(data.error);
+    else showResults(data);
+  } catch(err) {
+    showErr('Something went wrong. Please try again.');
+  }
+
+  document.getElementById('loading').style.display = 'none';
+  document.querySelector('.btn-submit').disabled = false;
+});
+
+// ── Show results ──────────────────────────────────────────────────────────────
+function showResults(data) {
+  const loc = data.location;
+  document.getElementById('locInfo').innerHTML =
+    `📍 Lat: <span>${loc.lat.toFixed(4)}</span>, Lon: <span>${loc.lon.toFixed(4)}</span>
+     &nbsp;|&nbsp; ⛰️ Elevation: <span>${loc.elevation}m</span>
+     &nbsp;|&nbsp; 📐 Slope: <span>${loc.slope}°</span>
+     &nbsp;|&nbsp; 🧭 Aspect: <span>${loc.aspect}°</span>`;
+
+  const ranks = ['🥇 Best Match', '🥈 2nd Choice', '🥉 3rd Choice'];
+  document.getElementById('resGrid').innerHTML = data.recommendations.map((r, i) => `
+    <div class="result-card">
+      <div class="r-rank">${ranks[i]}</div>
+      <div class="r-emoji">${r.emoji}</div>
+      <div class="r-crop">${r.crop}</div>
+      <div class="r-conf">${r.confidence}%</div>
+      <div class="conf-bar"><div class="conf-fill" style="width:${r.confidence}%"></div></div>
+      <div class="r-season">Season: ${r.season}</div>
+      <div class="r-desc">${r.desc}</div>
+    </div>
+  `).join('');
+
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+}
+
+// ── Error helpers ─────────────────────────────────────────────────────────────
+function showErr(msg) {
+  const el = document.getElementById('errBox');
+  el.textContent = msg;
+  el.style.display = 'block';
+}
+function hideErr() {
+  document.getElementById('errBox').style.display = 'none';
+}
+</script>
+</body>
+</html>

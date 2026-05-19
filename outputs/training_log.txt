@@ -1,0 +1,24 @@
+  XGBoost 3.2.0 found.
+  Grid size  : 96 combinations
+  CV folds   : 5
+  Early exit : ON (skips combos >3% below best after 2 folds)
+
+  * New best [1/96]  acc=0.9869 +/- 0.0053  {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.05, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_lambda': 0.5}
+  * New best [2/96]  acc=0.9886 +/- 0.0048  {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.05, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_lambda': 1.0}
+  * New best [9/96]  acc=0.9903 +/- 0.0029  {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.1, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_lambda': 0.5}
+  * New best [10/96]  acc=0.9909 +/- 0.0045  {'n_estimators': 100, 'max_depth': 4, 'learning_rate': 0.1, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_lambda': 1.0}
+  * New best [42/96]  acc=0.9915 +/- 0.0040  {'n_estimators': 200, 'max_depth': 4, 'learning_rate': 0.1, 'subsample': 0.8, 'colsample_bytree': 0.8, 'reg_lambda': 1.0}
+
+  Grid search done in 1249s  (0 combos skipped by early exit)
+  n_estimators           200
+  max_depth              4
+  learning_rate          0.1
+  subsample              0.8
+  colsample_bytree       0.8
+  reg_lambda             1.0
+
+  CV accuracy : 0.9915  (99.15%)
+
+  Training final model on 1,760 rows...
+  Best iteration : 149
+  Test accuracy  : 0.9932  (99.32%)

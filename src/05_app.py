@@ -287,32 +287,21 @@ def get_isda_token():
 
     print(f"iSDA: Attempting login for user: {ISDA_USERNAME[:4]}***")
     try:
-        # Try v2 login endpoint first
+        # Correct endpoint with application/x-www-form-urlencoded content type
         r = requests.post(
             "https://api.isda-africa.com/isdasoil/v2/login",
-            json={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
+            data={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
             timeout=10,
         )
-        print(f"iSDA v2 login status: {r.status_code} — {r.text[:100]}")
+        print(f"iSDA login status: {r.status_code} — {r.text[:150]}")
         if r.status_code == 200:
             ISDA_TOKEN      = r.json().get("access_token")
             ISDA_TOKEN_TIME = time.time()
-            print("iSDA token obtained successfully via v2.")
+            print("iSDA token obtained successfully.")
             return ISDA_TOKEN
-
-        # Try original login endpoint
-        r2 = requests.post(
-            "https://api.isda-africa.com/login",
-            data={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
-            timeout=10,
-        )
-        print(f"iSDA v1 login status: {r2.status_code} — {r2.text[:100]}")
-        if r2.status_code == 200:
-            ISDA_TOKEN      = r2.json().get("access_token")
-            ISDA_TOKEN_TIME = time.time()
-            print("iSDA token obtained successfully via v1.")
-            return ISDA_TOKEN
-
+        else:
+            print(f"iSDA login failed: {r.status_code}")
     except Exception as e:
         print(f"iSDA login error: {e}")
     return None

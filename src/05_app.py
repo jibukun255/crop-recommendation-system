@@ -267,14 +267,58 @@ def predict():
 
 
 
-# ── Regional soil defaults by country/region ──────────────────────────────────
-# Based on FAO regional soil data — used as defaults when SoilGrids is unavailable
+# ── Soil data fetching ────────────────────────────────────────────────────────
 def fetch_soil_data(lat, lon):
     """
     Fetch real soil NPK and pH from GPS coordinates.
-    Tries Kaegro API first (no auth needed), falls back to regional defaults.
+    Pipeline:
+      1. Kaegro API  — free, global, no auth (nitrogen + pH)
+      2. iSDA API    — free, Africa coverage (N, P, K, pH)
+      3. Regional defaults — fallback for anywhere
     """
-    # Try Kaegro API — free, no authentication
+
+    # ── Try iSDA Africa Soil API (best for Africa) ────────────────────────────
+    # iSDA covers all of Africa at 30m resolution — perfect for Nigeria
+    if -35 < lat < 38 and -20 < lon < 55:
+        try:
+            # iSDA returns soil properties as GeoTIFF values via their REST API
+            isda_props = {
+                "N":  "n_tot_ncs",   # total nitrogen
+                "P":  "p_mehlich3",  # phosphorus
+                "K":  "k_mehlich3",  # potassium
+                "ph": "ph_h2o",      # soil pH
+            }
+            results = {}
+            for key, prop in isda_props.items():
+                r = requests.get(
+                    f"https://api.isda-africa.com/v1/soilproperty",
+                    params={
+                        "key":      "ISDA_SOIL_2021",
+                        "lat":      lat,
+                        "lon":      lon,
+                        "property": prop,
+                        "depth":    "0-20cm",
+                    },
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    val = r.json().get("property", {}).get("value", {}).get("mean", None)
+                    if val is not None:
+                        results[key] = float(val)
+
+            if len(results) >= 3:
+                # Convert units to match Kaggle dataset ranges
+                n  = min(max(results.get("N",  70) * 10, 0), 200)  # g/kg → kg/ha approx
+                p  = min(max(results.get("P",  35),       0), 150)  # mg/kg
+                k  = min(max(results.get("K",  35),       0), 210)  # mg/kg
+                ph = min(max(results.get("ph", 6.3),      0),  14)
+                print(f"iSDA API: N={n}, P={p}, K={k}, pH={ph}")
+                return {"N": round(n,1), "P": round(p,1), "K": round(k,1),
+                        "ph": round(ph,1), "source": "iSDA Africa Soil API"}
+        except Exception as e:
+            print(f"iSDA API error: {e}")
+
+    # ── Try Kaegro API (global, nitrogen + pH) ────────────────────────────────
     try:
         r = requests.get(
             "https://www.kaegro.com/farms/api/soil",
@@ -283,15 +327,13 @@ def fetch_soil_data(lat, lon):
             headers={"User-Agent": "CropRecommendationSystem/1.0"}
         )
         if r.status_code == 200:
-            data = r.json()
+            data     = r.json()
             print(f"Kaegro API response: {data}")
-            # Extract values — Kaegro returns nitrogen in g/kg, convert to kg/ha
             nitrogen = data.get("nitrogen", data.get("n", None))
             ph       = data.get("ph",       data.get("pH", None))
-            # Kaegro may not have P and K directly — use regional for those
             if nitrogen and ph:
-                n_kgha = round(float(nitrogen) * 10, 1)  # g/kg → approx kg/ha
-                region = get_regional_soil_defaults(lat, lon)
+                n_kgha  = round(float(nitrogen) * 10, 1)
+                region  = get_regional_soil_defaults(lat, lon)
                 return {
                     "N":  min(max(n_kgha, 0), 200),
                     "P":  region["P"],
@@ -302,54 +344,77 @@ def fetch_soil_data(lat, lon):
     except Exception as e:
         print(f"Kaegro API error: {e}")
 
-    # Fallback — regional defaults
-    defaults = get_regional_soil_defaults(lat, lon)
-    defaults["source"] = "Regional soil estimates"
+    # ── Fallback — regional defaults ──────────────────────────────────────────
+    defaults         = get_regional_soil_defaults(lat, lon)
+    defaults["source"] = "Regional soil estimates (FAO data)"
     return defaults
 
 
 def fetch_climate(lat, lon):
-    """Fetch climate data from Open-Meteo API."""
+    """
+    Fetch accurate climate normals using Open-Meteo ERA5 historical API.
+    Uses the past 12 months of real data for accurate annual averages
+    instead of a short forecast window which overestimates rainfall.
+    """
     try:
-        # Get current conditions + 16-day forecast for rainfall estimate
+        from datetime import datetime, timedelta
+        end_date   = datetime.now().strftime("%Y-%m-%d")
+        start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+
         r = requests.get(
+            "https://archive-api.open-meteo.com/v1/archive",
+            params={
+                "latitude":   lat,
+                "longitude":  lon,
+                "start_date": start_date,
+                "end_date":   end_date,
+                "daily":      "temperature_2m_mean,relative_humidity_2m_mean,precipitation_sum",
+                "timezone":   "auto",
+            },
+            timeout=15,
+        )
+        data  = r.json()
+        daily = data.get("daily", {})
+
+        temps  = [t for t in daily.get("temperature_2m_mean",       []) if t is not None]
+        humids = [h for h in daily.get("relative_humidity_2m_mean", []) if h is not None]
+        rains  = [p for p in daily.get("precipitation_sum",         []) if p is not None]
+
+        if temps and humids and rains:
+            return {
+                "temperature": round(sum(temps)  / len(temps),  1),
+                "humidity":    round(sum(humids) / len(humids), 1),
+                "rainfall":    round(sum(rains),                1),
+            }
+    except Exception as e:
+        print(f"ERA5 climate API error: {e}")
+
+    # Fallback to forecast API
+    try:
+        r2 = requests.get(
             "https://api.open-meteo.com/v1/forecast",
             params={
-                "latitude":        lat,
-                "longitude":       lon,
-                "current":         "temperature_2m,relative_humidity_2m",
-                "daily":           "precipitation_sum",
-                "timezone":        "auto",
-                "forecast_days":   16,
+                "latitude":      lat,
+                "longitude":     lon,
+                "current":       "temperature_2m,relative_humidity_2m",
+                "daily":         "precipitation_sum",
+                "timezone":      "auto",
+                "forecast_days": 7,
             },
             timeout=10,
         )
-        data     = r.json()
-        current  = data.get("current", {})
-        daily    = data.get("daily", {})
-
-        temp     = current.get("temperature_2m",       25.0)
-        humidity = current.get("relative_humidity_2m", 70.0)
-
-        # Estimate annual rainfall from 16-day sum × scaling factor
-        rain_list = daily.get("precipitation_sum", [])
+        data2     = r2.json()
+        current   = data2.get("current", {})
+        rain_list = data2.get("daily", {}).get("precipitation_sum", [])
         rain_list = [r for r in rain_list if r is not None]
-        if rain_list:
-            daily_avg   = sum(rain_list) / len(rain_list)
-            annual_est  = round(daily_avg * 365, 1)
-        else:
-            annual_est  = 100.0
-
-        # Clamp to reasonable range
-        annual_est = max(30.0, min(annual_est, 3000.0))
-
+        annual    = round(sum(rain_list) * (365 / max(len(rain_list), 1)), 1)
         return {
-            "temperature": round(float(temp),     1),
-            "humidity":    round(float(humidity),  1),
-            "rainfall":    annual_est,
+            "temperature": round(float(current.get("temperature_2m",       25.0)), 1),
+            "humidity":    round(float(current.get("relative_humidity_2m", 70.0)), 1),
+            "rainfall":    max(annual, 50.0),
         }
     except Exception as e:
-        print(f"Open-Meteo error: {e}")
+        print(f"Forecast fallback error: {e}")
         return {"temperature": 25.0, "humidity": 70.0, "rainfall": 100.0}
 
 

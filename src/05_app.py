@@ -278,19 +278,41 @@ ISDA_TOKEN_TIME = 0
 def get_isda_token():
     """Get or refresh iSDA access token (expires every 60 minutes)."""
     global ISDA_TOKEN, ISDA_TOKEN_TIME
-    if ISDA_TOKEN and (time.time() - ISDA_TOKEN_TIME) < 3300:  # refresh before 55min
+    if ISDA_TOKEN and (time.time() - ISDA_TOKEN_TIME) < 3300:
         return ISDA_TOKEN
+
+    if not ISDA_USERNAME or not ISDA_PASSWORD:
+        print("iSDA: No credentials found in environment variables.")
+        return None
+
+    print(f"iSDA: Attempting login for user: {ISDA_USERNAME[:4]}***")
     try:
+        # Try v2 login endpoint first
         r = requests.post(
+            "https://api.isda-africa.com/isdasoil/v2/login",
+            json={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
+            timeout=10,
+        )
+        print(f"iSDA v2 login status: {r.status_code} — {r.text[:100]}")
+        if r.status_code == 200:
+            ISDA_TOKEN      = r.json().get("access_token")
+            ISDA_TOKEN_TIME = time.time()
+            print("iSDA token obtained successfully via v2.")
+            return ISDA_TOKEN
+
+        # Try original login endpoint
+        r2 = requests.post(
             "https://api.isda-africa.com/login",
             data={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
             timeout=10,
         )
-        if r.status_code == 200:
-            ISDA_TOKEN      = r.json().get("access_token")
+        print(f"iSDA v1 login status: {r2.status_code} — {r2.text[:100]}")
+        if r2.status_code == 200:
+            ISDA_TOKEN      = r2.json().get("access_token")
             ISDA_TOKEN_TIME = time.time()
-            print("iSDA token obtained successfully.")
+            print("iSDA token obtained successfully via v1.")
             return ISDA_TOKEN
+
     except Exception as e:
         print(f"iSDA login error: {e}")
     return None

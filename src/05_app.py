@@ -268,57 +268,95 @@ def predict():
 
 
 # ── Soil data fetching ────────────────────────────────────────────────────────
+# iSDA credentials from environment variables (set in Render dashboard)
+ISDA_USERNAME = os.environ.get("ISDA_USERNAME", "")
+ISDA_PASSWORD = os.environ.get("ISDA_PASSWORD", "")
+ISDA_TOKEN    = None
+ISDA_TOKEN_TIME = 0
+
+
+def get_isda_token():
+    """Get or refresh iSDA access token (expires every 60 minutes)."""
+    global ISDA_TOKEN, ISDA_TOKEN_TIME
+    if ISDA_TOKEN and (time.time() - ISDA_TOKEN_TIME) < 3300:  # refresh before 55min
+        return ISDA_TOKEN
+    try:
+        r = requests.post(
+            "https://api.isda-africa.com/login",
+            data={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            ISDA_TOKEN      = r.json().get("access_token")
+            ISDA_TOKEN_TIME = time.time()
+            print("iSDA token obtained successfully.")
+            return ISDA_TOKEN
+    except Exception as e:
+        print(f"iSDA login error: {e}")
+    return None
+
+
+def fetch_isda_soil(lat, lon):
+    """Fetch real soil NPK and pH from iSDA Africa API."""
+    token = get_isda_token()
+    if not token:
+        return None
+
+    try:
+        headers  = {"Authorization": f"Bearer {token}"}
+        props    = ["nitrogen_total", "phosphorus_extractable",
+                    "potassium_extractable", "ph"]
+        results  = {}
+
+        for prop in props:
+            r = requests.get(
+                f"https://api.isda-africa.com/isdasoil/v2/soilproperty",
+                params={"lat": lat, "lon": lon, "property": prop, "depth": "0-20"},
+                headers=headers,
+                timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                prop_data = data.get("property", {}).get(prop, [])
+                if prop_data:
+                    val = prop_data[0].get("value", {}).get("value", None)
+                    if val is not None:
+                        results[prop] = float(val)
+
+        if len(results) >= 3:
+            # Convert units to match Kaggle dataset ranges
+            n  = min(max(results.get("nitrogen_total",         0) * 10, 0), 200)
+            p  = min(max(results.get("phosphorus_extractable", 0),      0), 150)
+            k  = min(max(results.get("potassium_extractable",  0),      0), 210)
+            ph = min(max(results.get("ph",                     6.3),    0),  14)
+            print(f"iSDA: N={n:.1f}, P={p:.1f}, K={k:.1f}, pH={ph:.1f}")
+            return {
+                "N":  round(n,  1),
+                "P":  round(p,  1),
+                "K":  round(k,  1),
+                "ph": round(ph, 1),
+                "source": "iSDA Africa Soil API (30m resolution)"
+            }
+    except Exception as e:
+        print(f"iSDA soil fetch error: {e}")
+    return None
+
+
 def fetch_soil_data(lat, lon):
     """
     Fetch real soil NPK and pH from GPS coordinates.
     Pipeline:
-      1. Kaegro API  — free, global, no auth (nitrogen + pH)
-      2. iSDA API    — free, Africa coverage (N, P, K, pH)
-      3. Regional defaults — fallback for anywhere
+      1. iSDA Africa API — real satellite data, Africa coverage
+      2. Kaegro API      — global, nitrogen + pH only
+      3. Regional FAO    — fallback for anywhere
     """
+    # ── iSDA Africa (best for Africa) ─────────────────────────────────────────
+    if -35 < lat < 38 and -20 < lon < 55 and ISDA_USERNAME:
+        result = fetch_isda_soil(lat, lon)
+        if result:
+            return result
 
-    # ── Try iSDA Africa Soil API (best for Africa) ────────────────────────────
-    # iSDA covers all of Africa at 30m resolution — perfect for Nigeria
-    if -35 < lat < 38 and -20 < lon < 55:
-        try:
-            # iSDA returns soil properties as GeoTIFF values via their REST API
-            isda_props = {
-                "N":  "n_tot_ncs",   # total nitrogen
-                "P":  "p_mehlich3",  # phosphorus
-                "K":  "k_mehlich3",  # potassium
-                "ph": "ph_h2o",      # soil pH
-            }
-            results = {}
-            for key, prop in isda_props.items():
-                r = requests.get(
-                    f"https://api.isda-africa.com/v1/soilproperty",
-                    params={
-                        "key":      "ISDA_SOIL_2021",
-                        "lat":      lat,
-                        "lon":      lon,
-                        "property": prop,
-                        "depth":    "0-20cm",
-                    },
-                    timeout=10,
-                )
-                if r.status_code == 200:
-                    val = r.json().get("property", {}).get("value", {}).get("mean", None)
-                    if val is not None:
-                        results[key] = float(val)
-
-            if len(results) >= 3:
-                # Convert units to match Kaggle dataset ranges
-                n  = min(max(results.get("N",  70) * 10, 0), 200)  # g/kg → kg/ha approx
-                p  = min(max(results.get("P",  35),       0), 150)  # mg/kg
-                k  = min(max(results.get("K",  35),       0), 210)  # mg/kg
-                ph = min(max(results.get("ph", 6.3),      0),  14)
-                print(f"iSDA API: N={n}, P={p}, K={k}, pH={ph}")
-                return {"N": round(n,1), "P": round(p,1), "K": round(k,1),
-                        "ph": round(ph,1), "source": "iSDA Africa Soil API"}
-        except Exception as e:
-            print(f"iSDA API error: {e}")
-
-    # ── Try Kaegro API (global, nitrogen + pH) ────────────────────────────────
+    # ── Kaegro (global fallback) ───────────────────────────────────────────────
     try:
         r = requests.get(
             "https://www.kaegro.com/farms/api/soil",
@@ -328,12 +366,12 @@ def fetch_soil_data(lat, lon):
         )
         if r.status_code == 200:
             data     = r.json()
-            print(f"Kaegro API response: {data}")
+            print(f"Kaegro response: {data}")
             nitrogen = data.get("nitrogen", data.get("n", None))
             ph       = data.get("ph",       data.get("pH", None))
             if nitrogen and ph:
-                n_kgha  = round(float(nitrogen) * 10, 1)
-                region  = get_regional_soil_defaults(lat, lon)
+                n_kgha = round(float(nitrogen) * 10, 1)
+                region = get_regional_soil_defaults(lat, lon)
                 return {
                     "N":  min(max(n_kgha, 0), 200),
                     "P":  region["P"],
@@ -342,10 +380,10 @@ def fetch_soil_data(lat, lon):
                     "source": "Kaegro Soil API"
                 }
     except Exception as e:
-        print(f"Kaegro API error: {e}")
+        print(f"Kaegro error: {e}")
 
-    # ── Fallback — regional defaults ──────────────────────────────────────────
-    defaults         = get_regional_soil_defaults(lat, lon)
+    # ── Regional FAO defaults ──────────────────────────────────────────────────
+    defaults           = get_regional_soil_defaults(lat, lon)
     defaults["source"] = "Regional soil estimates (FAO data)"
     return defaults
 

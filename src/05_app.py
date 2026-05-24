@@ -286,24 +286,36 @@ def get_isda_token():
         return None
 
     print(f"iSDA: Attempting login for user: {ISDA_USERNAME[:4]}***")
-    try:
-        # Correct endpoint with application/x-www-form-urlencoded content type
-        r = requests.post(
-            "https://api.isda-africa.com/isdasoil/v2/login",
-            data={"username": ISDA_USERNAME, "password": ISDA_PASSWORD},
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            timeout=10,
-        )
-        print(f"iSDA login status: {r.status_code} — {r.text[:150]}")
-        if r.status_code == 200:
-            ISDA_TOKEN      = r.json().get("access_token")
-            ISDA_TOKEN_TIME = time.time()
-            print("iSDA token obtained successfully.")
-            return ISDA_TOKEN
-        else:
-            print(f"iSDA login failed: {r.status_code}")
-    except Exception as e:
-        print(f"iSDA login error: {e}")
+
+    # Try all known login endpoints
+    endpoints = [
+        ("POST", "https://api.isda-africa.com/isdasoil/v2/login",  "form"),
+        ("POST", "https://api.isda-africa.com/login",              "form"),
+        ("POST", "https://api.isda-africa.com/isdasoil/v2/token",  "form"),
+        ("POST", "https://api.isda-africa.com/token",              "form"),
+    ]
+
+    for method, url, content_type in endpoints:
+        try:
+            payload = {"username": ISDA_USERNAME, "password": ISDA_PASSWORD}
+            r = requests.post(
+                url,
+                data=payload,
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+                timeout=8,
+            )
+            print(f"iSDA {url} → {r.status_code}: {r.text[:80]}")
+            if r.status_code == 200:
+                token = r.json().get("access_token")
+                if token:
+                    ISDA_TOKEN      = token
+                    ISDA_TOKEN_TIME = time.time()
+                    print(f"iSDA token obtained from {url}")
+                    return ISDA_TOKEN
+        except Exception as e:
+            print(f"iSDA {url} error: {e}")
+
+    print("iSDA: All login endpoints failed.")
     return None
 
 

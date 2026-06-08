@@ -1,12 +1,13 @@
 """
-00_augment_dataset.py — Dataset Augmentation
-=============================================
+00_augment_dataset.py — Dataset Augmentation (Fixed Version)
+=============================================================
 Takes the Kaggle crop recommendation dataset and augments it with:
   1. Soil type      — realistic soil type per crop (categorical)
   2. GPS coordinates — realistic lat/lon per crop growing region in India
   3. Topography     — elevation, slope, aspect via NASADEM (Open-Elevation API)
+                      Uses 3 real NASADEM points per record for accurate slope
+                      Slope correctly expressed in DEGREES (not radians)
   4. Seasonal climate — derives Winter/Spring/Summer/Autumn breakdown
-                        from existing temperature, humidity, rainfall values
 
 Input  : data/raw/Crop_recommendation.csv
 Output : data/raw/crop_data_augmented.csv
@@ -31,7 +32,7 @@ OUTPUT_CSV  = os.path.join(BASE_DIR, "data", "raw", "crop_data_augmented.csv")
 
 # ── API ───────────────────────────────────────────────────────────────────────
 API_URL     = "https://api.open-elevation.com/api/v1/lookup"
-BATCH_SIZE  = 100
+BATCH_SIZE  = 50       # smaller batch — 3 points per record = 150 API points per batch
 RETRY_MAX   = 3
 RETRY_WAIT  = 5
 NODATA_VAL  = -32767
@@ -39,10 +40,13 @@ RANDOM_SEED = 42
 random.seed(RANDOM_SEED)
 np.random.seed(RANDOM_SEED)
 
+# Offset in degrees for neighbouring points (used for slope/aspect)
+# 0.01 degrees ≈ 1,113 metres at equator — good resolution for terrain
+OFFSET = 0.01
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 1. Soil type mapping
-# Source: Indian Council of Agricultural Research (ICAR) crop-soil guidelines
+# 1. Soil type mapping (ICAR crop-soil guidelines)
 # ─────────────────────────────────────────────────────────────────────────────
 SOIL_TYPE_MAP = {
     "rice":        ["Alluvial", "Clay", "Loamy"],
@@ -71,8 +75,7 @@ SOIL_TYPE_MAP = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 2. GPS coordinate ranges per crop
-# Based on primary growing states in India (ICAR/NHB data)
+# 2. GPS coordinate ranges per crop (ICAR/NHB primary growing regions)
 # ─────────────────────────────────────────────────────────────────────────────
 COORD_MAP = {
     "rice":        ((20.0, 27.0), (80.0, 88.0)),
@@ -101,43 +104,29 @@ COORD_MAP = {
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 3. Seasonal climate derivation
-# Derives 4-season breakdown from annual avg temperature, humidity, rainfall
-# Using realistic seasonal variation coefficients per crop
+# 3. Seasonal climate multipliers (Indian seasonal patterns)
 # ─────────────────────────────────────────────────────────────────────────────
-# Season multipliers: [Winter, Spring, Summer, Autumn]
-# These reflect how each variable changes across seasons for Indian crops
-SEASON_TEMP_MULT   = [0.75, 1.00, 1.25, 1.00]   # summer hottest
-SEASON_HUMID_MULT  = [0.80, 0.90, 1.20, 1.10]   # monsoon/summer most humid
-SEASON_RAIN_MULT   = [0.10, 0.20, 0.50, 0.20]   # summer/monsoon most rain
-SEASONS            = ["W", "Sp", "Su", "Au"]
+SEASON_TEMP_MULT  = [0.75, 1.00, 1.25, 1.00]
+SEASON_HUMID_MULT = [0.80, 0.90, 1.20, 1.10]
+SEASON_RAIN_MULT  = [0.10, 0.20, 0.50, 0.20]
+SEASONS           = ["W", "Sp", "Su", "Au"]
 
 
 def derive_seasonal_climate(row):
-    """
-    From annual temperature, humidity, rainfall — derive seasonal values.
-    Adds small random noise to make each row realistic.
-    """
     features = {}
     for i, season in enumerate(SEASONS):
         noise_t = np.random.normal(0, 0.5)
         noise_h = np.random.normal(0, 1.0)
         noise_r = np.random.normal(0, 2.0)
-
-        features[f"T2M_MAX-{season}"] = round(
-            row["temperature"] * SEASON_TEMP_MULT[i] * 1.05 + noise_t, 4)
-        features[f"T2M_MIN-{season}"] = round(
-            row["temperature"] * SEASON_TEMP_MULT[i] * 0.85 + noise_t, 4)
-        features[f"QV2M-{season}"]    = round(
-            row["humidity"] * SEASON_HUMID_MULT[i] / 100 + noise_h * 0.01, 4)
-        features[f"PRECTOTCORR-{season}"] = round(
-            max(0, row["rainfall"] * SEASON_RAIN_MULT[i] + noise_r), 4)
-
+        features[f"T2M_MAX-{season}"]      = round(row["temperature"] * SEASON_TEMP_MULT[i]  * 1.05 + noise_t, 4)
+        features[f"T2M_MIN-{season}"]      = round(row["temperature"] * SEASON_TEMP_MULT[i]  * 0.85 + noise_t, 4)
+        features[f"QV2M-{season}"]         = round(row["humidity"]    * SEASON_HUMID_MULT[i] / 100  + noise_h * 0.01, 4)
+        features[f"PRECTOTCORR-{season}"]  = round(max(0, row["rainfall"] * SEASON_RAIN_MULT[i] + noise_r), 4)
     return features
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. GPS coordinate assignment
+# 4. GPS assignment
 # ─────────────────────────────────────────────────────────────────────────────
 def assign_coordinates(df):
     lats, lons = [], []
@@ -151,13 +140,17 @@ def assign_coordinates(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 5. Elevation fetching (NASADEM via Open-Elevation)
+# 5. Elevation fetching — queries 3 points per record for slope/aspect
 # ─────────────────────────────────────────────────────────────────────────────
-def fetch_elevations_batch(pairs):
-    locations = [{"latitude": lat, "longitude": lon} for lat, lon in pairs]
+def fetch_elevations_batch(locations: list) -> list:
+    """Send a batch of lat/lon dicts to Open-Elevation API."""
     for attempt in range(1, RETRY_MAX + 1):
         try:
-            r = requests.post(API_URL, json={"locations": locations}, timeout=30)
+            r = requests.post(
+                API_URL,
+                json={"locations": locations},
+                timeout=30
+            )
             r.raise_for_status()
             return [res.get("elevation", NODATA_VAL)
                     for res in r.json().get("results", [])]
@@ -165,33 +158,90 @@ def fetch_elevations_batch(pairs):
             print(f"    Attempt {attempt}/{RETRY_MAX} failed: {e}")
             if attempt < RETRY_MAX:
                 time.sleep(RETRY_WAIT)
-    return [NODATA_VAL] * len(pairs)
+    return [NODATA_VAL] * len(locations)
 
 
-def fetch_all_elevations(df):
-    all_elevs = []
-    pairs     = list(zip(df["latitude"], df["longitude"]))
-    total     = len(pairs)
-    print(f"  Fetching elevations for {total:,} rows in batches of {BATCH_SIZE}...")
+def fetch_all_topography(df: pd.DataFrame):
+    """
+    For each record, query NASADEM for 3 points:
+      - Center point (lat, lon)          → elevation
+      - North offset (lat+0.01, lon)     → for slope N-S component
+      - East offset  (lat, lon+0.01)     → for slope E-W component
+
+    Slope is computed in DEGREES from the elevation differences.
+    Aspect is the compass direction of steepest descent.
+
+    Horizontal distance for 0.01 degree offset ≈ 1,113 metres.
+    """
+    elevations = []
+    slopes     = []
+    aspects    = []
+
+    pairs  = list(zip(df["latitude"], df["longitude"]))
+    total  = len(pairs)
+    DIST_M = OFFSET * 111300  # metres per degree × offset degrees
+
+    print(f"\n  Querying NASADEM for {total:,} records (3 points each)...")
+    print(f"  Slope will be in DEGREES. Horizontal distance = {DIST_M:.0f}m per offset.")
+
     for start in range(0, total, BATCH_SIZE):
         end   = min(start + BATCH_SIZE, total)
-        batch = pairs[start:end]
+        batch_locs = []
+
+        for lat, lon in pairs[start:end]:
+            batch_locs.append({"latitude": lat,         "longitude": lon})           # center
+            batch_locs.append({"latitude": lat + OFFSET,"longitude": lon})           # north
+            batch_locs.append({"latitude": lat,         "longitude": lon + OFFSET})  # east
+
         print(f"  Rows {start+1:>4}–{end:>4} / {total}", end="  ")
-        elevs = fetch_elevations_batch(batch)
-        all_elevs.extend(elevs)
-        print(f"done  (sample: {elevs[0]:.0f}m)")
+        elev_vals = fetch_elevations_batch(batch_locs)
+        print(f"done")
+
+        # Process 3 values per record
+        for i in range(len(pairs[start:end])):
+            e_center = elev_vals[i * 3]
+            e_north  = elev_vals[i * 3 + 1]
+            e_east   = elev_vals[i * 3 + 2]
+
+            # Handle NoData
+            if e_center == NODATA_VAL:
+                e_center = 200
+            if e_north == NODATA_VAL:
+                e_north = e_center
+            if e_east == NODATA_VAL:
+                e_east = e_center
+
+            # Elevation gradient components (metres)
+            dz_ns = float(e_north) - float(e_center)  # north-south rise
+            dz_ew = float(e_east)  - float(e_center)  # east-west rise
+
+            # Slope in DEGREES — atan of rise/run
+            rise = math.sqrt(dz_ns**2 + dz_ew**2)
+            slope_deg = math.degrees(math.atan(rise / DIST_M))
+
+            # Aspect — compass bearing of steepest ascent (0=North, 90=East)
+            aspect_deg = (math.degrees(math.atan2(dz_ew, dz_ns)) + 360) % 360
+
+            elevations.append(int(e_center))
+            slopes.append(round(slope_deg, 4))
+            aspects.append(round(aspect_deg, 4))
+
         if end < total:
-            time.sleep(0.5)
-    return all_elevs
+            time.sleep(0.3)
+
+    return elevations, slopes, aspects
 
 
-def handle_nodata(df):
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. NoData handling
+# ─────────────────────────────────────────────────────────────────────────────
+def handle_nodata(df: pd.DataFrame) -> pd.DataFrame:
     mask  = df["elevation"] == NODATA_VAL
     count = mask.sum()
     if count == 0:
         print("  No NoData values — all elevations valid.")
         return df
-    print(f"  Fixing {count} NoData rows via crop-median interpolation...")
+    print(f"  Fixing {count} NoData elevation(s) via crop-median interpolation...")
     for idx in df[mask].index:
         crop  = df.at[idx, "label"]
         valid = df[(df["label"] == crop) & (df["elevation"] != NODATA_VAL)]
@@ -200,46 +250,7 @@ def handle_nodata(df):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. Slope & aspect computation
-# ─────────────────────────────────────────────────────────────────────────────
-def compute_slope_aspect(df):
-    from sklearn.neighbors import BallTree
-
-    lats  = df["latitude"].values
-    lons  = df["longitude"].values
-    elevs = df["elevation"].values
-
-    coords_rad = [[math.radians(la), math.radians(lo)]
-                  for la, lo in zip(lats, lons)]
-    tree = BallTree(coords_rad, metric="haversine")
-    distances, indices = tree.query(coords_rad, k=2)
-
-    R = 6371000
-    slopes, aspects = [], []
-
-    for i in range(len(df)):
-        ni      = indices[i][1]
-        dist_m  = distances[i][1] * R
-        e_diff  = abs(float(elevs[i]) - float(elevs[ni]))
-
-        slope_deg = math.degrees(math.atan(e_diff / dist_m)) if dist_m > 0 else 0.0
-
-        lat1 = math.radians(lats[i]);  lon1 = math.radians(lons[i])
-        lat2 = math.radians(lats[ni]); lon2 = math.radians(lons[ni])
-        dlon = lon2 - lon1
-        x    = math.sin(dlon) * math.cos(lat2)
-        y    = (math.cos(lat1) * math.sin(lat2)
-                - math.sin(lat1) * math.cos(lat2) * math.cos(dlon))
-        bearing = (math.degrees(math.atan2(x, y)) + 360) % 360
-
-        slopes.append(round(slope_deg, 6))
-        aspects.append(round(bearing,  6))
-
-    return slopes, aspects
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Main
+# 7. Main
 # ─────────────────────────────────────────────────────────────────────────────
 def section(title):
     print(f"\n── {title} {'─' * (55 - len(title))}")
@@ -247,15 +258,14 @@ def section(title):
 
 def main():
     print("=" * 62)
-    print("  Step 0 — Dataset Augmentation")
-    print("  Adding: soil type | GPS | topography | seasonal climate")
+    print("  Step 0 — Dataset Augmentation (Fixed Version)")
+    print("  Slope will be correctly expressed in DEGREES")
     print("=" * 62)
 
     # ── Load ──────────────────────────────────────────────────────
     section("Loading Kaggle dataset")
     if not os.path.exists(INPUT_CSV):
         print(f"  ERROR: {INPUT_CSV} not found.")
-        print("  Download from: https://www.kaggle.com/datasets/atharvaingle/crop-recommendation-dataset")
         sys.exit(1)
 
     df = pd.read_csv(INPUT_CSV)
@@ -264,48 +274,50 @@ def main():
     print(f"  Crops  : {sorted(df['label'].unique())}")
 
     # ── Soil type ─────────────────────────────────────────────────
-    section("Adding soil type")
+    section("Assigning soil types (ICAR guidelines)")
     df["Soiltype"] = df["label"].apply(
         lambda crop: random.choice(SOIL_TYPE_MAP[crop])
     )
-    print(f"  Soil types assigned: {sorted(df['Soiltype'].unique())}")
-    print(df.groupby("Soiltype").size().to_string())
+    print(f"  Soil types: {sorted(df['Soiltype'].unique())}")
 
     # ── GPS coordinates ───────────────────────────────────────────
-    section("Assigning GPS coordinates")
+    section("Assigning GPS coordinates (ICAR regional data)")
     df = assign_coordinates(df)
-    print(f"  Latitude  range: {df['latitude'].min():.2f} to {df['latitude'].max():.2f}")
-    print(f"  Longitude range: {df['longitude'].min():.2f} to {df['longitude'].max():.2f}")
+    print(f"  Latitude  : {df['latitude'].min():.2f} to {df['latitude'].max():.2f}")
+    print(f"  Longitude : {df['longitude'].min():.2f} to {df['longitude'].max():.2f}")
 
-    # ── Elevation ─────────────────────────────────────────────────
-    section("Fetching elevation from NASADEM (Open-Elevation API)")
-    df["elevation"] = fetch_all_elevations(df)
+    # ── Topography ────────────────────────────────────────────────
+    section("Extracting topography from NASADEM (3 points per record)")
+    elevations, slopes, aspects = fetch_all_topography(df)
+    df["elevation"] = elevations
+    df["slope"]     = slopes
+    df["aspect"]    = aspects
+
+    # Fix NoData
     df = handle_nodata(df)
-    print(f"  Elevation range: {df['elevation'].min():.0f}m to {df['elevation'].max():.0f}m")
-    print(f"  Mean elevation : {df['elevation'].mean():.0f}m")
 
-    # ── Slope & aspect ────────────────────────────────────────────
-    section("Computing slope and aspect")
-    slopes, aspects = compute_slope_aspect(df)
-    df["slope"]  = slopes
-    df["aspect"] = aspects
-    print(f"  Slope  range: {df['slope'].min():.2f} to {df['slope'].max():.2f} degrees")
-    print(f"  Aspect range: {df['aspect'].min():.2f} to {df['aspect'].max():.2f} degrees")
+    # Verify slope range
+    print(f"\n  Elevation: min={df['elevation'].min():.0f}m  max={df['elevation'].max():.0f}m  mean={df['elevation'].mean():.0f}m")
+    print(f"  Slope    : min={df['slope'].min():.2f}°  max={df['slope'].max():.2f}°  mean={df['slope'].mean():.2f}°")
+    print(f"  Aspect   : min={df['aspect'].min():.1f}°  max={df['aspect'].max():.1f}°")
+
+    if df['slope'].max() > 60:
+        print("  WARNING: Some slope values > 60° — check terrain data")
+    else:
+        print("  Slope values look realistic for agricultural land.")
 
     # ── Seasonal climate ──────────────────────────────────────────
     section("Deriving seasonal climate features")
     seasonal_rows = df.apply(derive_seasonal_climate, axis=1)
     seasonal_df   = pd.DataFrame(list(seasonal_rows))
     df = pd.concat([df, seasonal_df], axis=1)
-    seasonal_cols = list(seasonal_df.columns)
-    print(f"  Added {len(seasonal_cols)} seasonal columns:")
-    print(f"  {seasonal_cols}")
+    print(f"  Added {len(seasonal_df.columns)} seasonal columns.")
 
     # ── Final column order ────────────────────────────────────────
-    section("Organizing final dataset")
+    section("Organising final dataset")
     core_cols     = ["N", "P", "K", "ph", "Soiltype"]
     climate_cols  = ["temperature", "humidity", "rainfall"]
-    seasonal_cols_ordered = [
+    seasonal_cols = [
         f"{var}-{s}"
         for var in ["QV2M", "T2M_MAX", "T2M_MIN", "PRECTOTCORR"]
         for s in ["W", "Sp", "Su", "Au"]
@@ -314,12 +326,10 @@ def main():
     geo_cols      = ["latitude", "longitude"]
     target_col    = ["label"]
 
-    final_cols = (core_cols + climate_cols + seasonal_cols_ordered
-                  + topo_cols + geo_cols + target_col)
+    final_cols = core_cols + climate_cols + seasonal_cols + topo_cols + geo_cols + target_col
     df = df[final_cols]
 
-    print(f"  Final shape  : {df.shape[0]:,} rows x {df.shape[1]} columns")
-    print(f"  Final columns: {list(df.columns)}")
+    print(f"  Final shape : {df.shape[0]:,} rows x {df.shape[1]} columns")
 
     # ── Save ──────────────────────────────────────────────────────
     section("Saving augmented dataset")
@@ -327,18 +337,13 @@ def main():
     df.to_csv(OUTPUT_CSV, index=False)
     print(f"  Saved -> {OUTPUT_CSV}")
 
-    # ── Summary ───────────────────────────────────────────────────
     print("\n" + "=" * 62)
     print("  Augmentation complete!")
     print(f"  Original : 2,200 rows x 8 columns")
     print(f"  Augmented: {df.shape[0]:,} rows x {df.shape[1]} columns")
-    print(f"\n  New features added:")
-    print(f"    Soiltype              (categorical)")
-    print(f"    latitude, longitude   (GPS coordinates)")
-    print(f"    elevation             (metres, from NASADEM)")
-    print(f"    slope, aspect         (terrain, computed)")
-    print(f"    16 seasonal features  (temp/humidity/rain x 4 seasons)")
-    print(f"\n  Next step: python src/01_preprocess.py")
+    print(f"\n  Slope range: {df['slope'].min():.2f}° to {df['slope'].max():.2f}°")
+    print(f"  (Expected: 0°-25° for agricultural land)")
+    print("\n  Next step: python src/01_preprocess.py")
     print("=" * 62)
 
 

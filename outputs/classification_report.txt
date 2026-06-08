@@ -2,10 +2,10 @@
   CROP RECOMMENDATION SYSTEM — EVALUATION REPORT
 ==============================================================
 
-  Accuracy  : 0.9932  (99.32%)
-  Precision : 0.9933  (weighted)
-  Recall    : 0.9932  (weighted)
-  F1-Score  : 0.9932  (weighted)
+  Accuracy  : 0.9955  (99.55%)
+  Precision : 0.9957  (weighted)
+  Recall    : 0.9955  (weighted)
+  F1-Score  : 0.9954  (weighted)
 
 ── Per-class Report ───────────────────────────────────
               precision    recall  f1-score   support
@@ -18,24 +18,24 @@
       coffee       1.00      1.00      1.00        20
       cotton       1.00      1.00      1.00        20
       grapes       1.00      1.00      1.00        20
-        jute       0.95      0.95      0.95        20
+        jute       1.00      1.00      1.00        20
  kidneybeans       1.00      1.00      1.00        20
-      lentil       1.00      0.95      0.97        20
+      lentil       1.00      0.90      0.95        20
        maize       1.00      1.00      1.00        20
        mango       1.00      1.00      1.00        20
    mothbeans       0.95      1.00      0.98        20
-    mungbean       1.00      1.00      1.00        20
+    mungbean       0.95      1.00      0.98        20
    muskmelon       1.00      1.00      1.00        20
       orange       1.00      1.00      1.00        20
       papaya       1.00      1.00      1.00        20
   pigeonpeas       1.00      1.00      1.00        20
  pomegranate       1.00      1.00      1.00        20
-        rice       0.95      0.95      0.95        20
+        rice       1.00      1.00      1.00        20
   watermelon       1.00      1.00      1.00        20
 
-    accuracy                           0.99       440
-   macro avg       0.99      0.99      0.99       440
-weighted avg       0.99      0.99      0.99       440
+    accuracy                           1.00       440
+   macro avg       1.00      1.00      1.00       440
+weighted avg       1.00      1.00      1.00       440
 
 
   Ablation result: Topographic features contribute +0.00% accuracy improvement.
